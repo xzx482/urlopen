@@ -4,9 +4,12 @@ from typing import Union
 from urllib import request,parse,error,response
 from http import cookiejar
 from copy import deepcopy
-from gzip import decompress
+from gzip import decompress,GzipFile
 import json
 
+
+class 长度不一致(error.ContentTooShortError):
+	pass
 
 class 不处理异常响应码Handler(request.HTTPDefaultErrorHandler):
 	def http_error_default(self, req, fp, code, msg, hdrs):
@@ -33,10 +36,11 @@ def 头部信息解析(值)->dict:
 
 
 class 响应内容类型(Enum):
-	自动=0
+	#自动=0
 	json=2
 	文本=3
 	二进制=4
+	二进制流=5
 
 class 响应:
 	def __init__(s,原始响应:response.addinfourl):
@@ -47,7 +51,8 @@ class 响应:
 		s.响应内容=None
 
 	
-	def 获取内容(s,解码=响应内容类型.自动):
+	def 获取内容(s,解码:响应内容类型):
+		'''
 		if 解码==响应内容类型.自动:
 			响应类型=s.响应头['Content-Type']
 			if 响应类型 and 'application' in 响应类型:#响应类型可能为 None
@@ -59,28 +64,32 @@ class 响应:
 					解码=响应内容类型.文本
 			else:
 				解码=响应内容类型.文本
-		
-		二进制流=s.原始响应.read()
+		'''
+		二进制流=s.原始响应
 
 		#判断gzip压缩
 		if s.响应头['content-encoding']=='gzip':
-			二进制流_=decompress(二进制流)
+			二进制流_=GzipFile(fileobj=二进制流)
 		else:
 			二进制流_=二进制流
 
-		if 解码==响应内容类型.二进制:
-			s.响应内容=二进制流_
+		if 解码==响应内容类型.二进制流:
+			return 二进制流_
 		else:
-
-			编码=json.detect_encoding(二进制流_)
-			文本=二进制流_.decode(编码)
-			if 解码==响应内容类型.文本:
-				s.响应内容=文本
-			elif 解码==响应内容类型.json:
-				s.响应内容=json.loads(文本)
+			二进制数据_=二进制流_.read()
+			if 解码==响应内容类型.二进制:
+				s.响应内容=二进制数据_
 			else:
-				raise Exception('未知的响应内容类型')
-		return s.响应内容
+
+				编码=json.detect_encoding(二进制数据_)
+				文本=二进制数据_.decode(编码)
+				if 解码==响应内容类型.文本:
+					s.响应内容=文本
+				elif 解码==响应内容类型.json:
+					s.响应内容=json.loads(文本)
+				else:
+					raise Exception('未知的响应内容类型')
+			return s.响应内容
 
 	def 保存到文件(s,文件名=None):
 		if 文件名 is None:
@@ -89,16 +98,30 @@ class 响应:
 				内容处置_=头部信息解析(内容处置)
 				if 'filename' in 内容处置_:
 					文件名=内容处置_['filename']
-
+					
 		if 文件名 is None:
 			文件名=parse.unquote( s.实际url.split('/')[-1] )
 
+
+		响应流=s.获取内容(响应内容类型.二进制流)
+		块大小=1024*1024
+		已读=0
+		文件大小=-1
+		内容长度=s.响应头['Content-Length']
+		if 内容长度:
+			文件大小=int(内容长度)
+
 		with open(文件名,'wb') as f:
 			while True:
-				二进制流=s.原始响应.read(1048576)
+				二进制流=响应流.read(块大小)
 				if not 二进制流:
 					break
+				已读+=len(二进制流)
 				f.write(二进制流)
+
+		if 文件大小>0 and 文件大小!=已读:
+			raise 长度不一致('文件大小不匹配')
+
 		return 文件名
 
 	def __repr__(s):
@@ -162,7 +185,11 @@ class 请求:
 		请求头:Union[dict[str,str],list,None]=None,方法:Union[请求方法,str]=请求方法.自动
 	):
 		s.url=url
-		s.请求头={}
+		s.请求头={
+			'accept-encoding': 'gzip',
+			'accept-language': 'zh-CN,zh;q=0.9',
+			#'user-agent':'Mozilla/0 (Winow T 0; Wi4; x4) BananaWebKit/37.6 (KHTML, like A Gecko) GuessWhoIAm/8.0.387.122 Saar/53.6'
+		}
 		if 数据 is None:
 			if 方法==请求方法.自动:
 				方法=请求方法.GET
@@ -235,10 +262,12 @@ class 请求:
 		while True:
 			try:
 				return s.使用打开器打开(打开器)
-			except Exception as e:
-				if 最大重试次数>-1 and 计数>=最大重试次数:
-					raise
+			except error.URLError as e:#只处理URLError, 只有URLError重试有意义
+				if isinstance(e,error.HTTPError):
+					raise e
 				计数+=1
+				if 最大重试次数>-1 and 计数>最大重试次数:
+					raise e
 				回调(e,计数)
 				time.sleep(重试间隔_秒)
 
@@ -315,3 +344,9 @@ class 会话:
 		finally:
 			s.cookie._cookies_lock.release()
 
+
+if __name__=='__main__':
+	q=请求('https://cn.bing.com/')
+	x=q.打开()
+	s=x.获取内容(响应内容类型.文本)
+	print(s)
