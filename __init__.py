@@ -1,4 +1,5 @@
 from enum import Enum
+from http.client import RemoteDisconnected
 import time
 from typing import Union
 from urllib import request,parse,error,response
@@ -262,7 +263,7 @@ class 请求:
 		while True:
 			try:
 				return s.使用打开器打开(打开器)
-			except error.URLError as e:#只处理URLError, 只有URLError重试有意义
+			except (error.URLError,RemoteDisconnected) as e:#其他错误重试没有意义
 				if isinstance(e,error.HTTPError):
 					raise e
 				计数+=1
